@@ -99,6 +99,53 @@ void test_bvh() {
     check(!empty.closest_hit({{0,0,1}, {0,0,-1}}), "empty BVH");
 }
 
+void test_ray_scale_edges() {
+    using namespace geom3d;
+
+    AABB unit_box({-1, -1, -1}, {1, 1, 1});
+    bool zero_direction_rejected = false;
+    try {
+        (void)unit_box.intersect_ray({{0, 0, 0}, {0, 0, 0}});
+    } catch (const std::invalid_argument&) {
+        zero_direction_rejected = true;
+    }
+    check(zero_direction_rejected, "AABB rejects a zero-direction ray");
+
+    const Triangle unit_triangle{{-1, -1, 0}, {1, -1, 0}, {0, 1, 0}};
+    TriangleBVH unit_bvh({unit_triangle});
+    const auto tiny_direction_hit = unit_bvh.closest_hit({{0, 0, 2e-200}, {0, 0, -1e-200}});
+    check(tiny_direction_hit && close(tiny_direction_hit->t, 2.0),
+          "ray direction remains valid when its squared length underflows");
+
+    const double tiny = 1e-200;
+    const Triangle tiny_triangle{{0, 0, 0}, {tiny, 0, 0}, {0, tiny, 0}};
+    TriangleBVH tiny_bvh({tiny_triangle});
+    const auto tiny_geometry_hit = tiny_bvh.closest_hit({{0.2*tiny, 0.2*tiny, 2*tiny}, {0, 0, -tiny}});
+    check(tiny_geometry_hit && close(tiny_geometry_hit->t, 2.0),
+          "triangle intersection remains stable when squared edge scales underflow");
+
+    const double large = 8e307;
+    const double larger = 9e307;
+    const Triangle large_triangle{{large, large, large}, {larger, large, large}, {large, larger, large}};
+    TriangleBVH large_bvh({large_triangle});
+    const auto large_hit = large_bvh.closest_hit({{8.2e307, 8.2e307, larger}, {0, 0, -1e307}});
+    check(large_hit && close(large_hit->t, 1.0),
+          "BVH handles large finite coordinates without overflowing centroid or determinant");
+    check(large_hit && close(large_hit->position.z / large, 1.0),
+          "large-coordinate hit position remains finite and on the triangle");
+
+    AABB extreme_slab({-1, -1, -1.6e308}, {1, 1, -1.5e308});
+    const auto extreme_interval = extreme_slab.intersect_ray({{0, 0, 1.6e308}, {0, 0, -1.6e308}});
+    check(extreme_interval && close(extreme_interval->first, 1.9375) &&
+          close(extreme_interval->second, 2.0),
+          "AABB ray slab handles a finite coordinate difference beyond double range");
+
+    AABB large_box({large, large, large}, {larger, larger, larger});
+    const Vec3 large_center = large_box.centroid();
+    check(close(large_center.x / 8.5e307, 1.0) && close(large_center.y / 8.5e307, 1.0),
+          "AABB centroid avoids overflow for same-sign large bounds");
+}
+
 } // namespace
 
 int main() {
@@ -107,6 +154,7 @@ int main() {
         test_orientation();
         test_kdtree();
         test_bvh();
+        test_ray_scale_edges();
         std::cout << "All " << checks << " checks passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
