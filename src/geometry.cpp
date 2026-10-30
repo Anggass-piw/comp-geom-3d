@@ -17,6 +17,49 @@ bool finite(const Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
+struct WideVec3 {
+    long double x;
+    long double y;
+    long double z;
+};
+
+WideVec3 to_wide(const Vec3& v) {
+    return {static_cast<long double>(v.x), static_cast<long double>(v.y),
+            static_cast<long double>(v.z)};
+}
+
+WideVec3 operator+(const WideVec3& a, const WideVec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+WideVec3 operator-(const WideVec3& a, const WideVec3& b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+WideVec3 operator*(const WideVec3& v, long double scalar) {
+    return {v.x * scalar, v.y * scalar, v.z * scalar};
+}
+
+WideVec3 operator/(const WideVec3& v, long double scalar) {
+    return {v.x / scalar, v.y / scalar, v.z / scalar};
+}
+
+long double wide_dot(const WideVec3& a, const WideVec3& b) {
+    return a.x*b.x + a.y*b.y + a.z*b.z;
+}
+
+WideVec3 wide_cross(const WideVec3& a, const WideVec3& b) {
+    return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x};
+}
+
+long double max_abs(const WideVec3& v) {
+    return std::max({std::abs(v.x), std::abs(v.y), std::abs(v.z)});
+}
+
+double midpoint(double a, double b) {
+    return std::signbit(a) == std::signbit(b) ? a + (b - a) * 0.5 : (a + b) * 0.5;
+}
+
 void require_finite(const Vec3& v, const char* what) {
     if (!finite(v)) throw std::invalid_argument(std::string(what) + " must be finite");
 }
@@ -24,7 +67,7 @@ void require_finite(const Vec3& v, const char* what) {
 void require_ray(const Ray& ray, double t_min, double t_max) {
     require_finite(ray.origin, "ray origin");
     require_finite(ray.direction, "ray direction");
-    if (squared_length(ray.direction) == 0.0)
+    if (ray.direction.x == 0.0 && ray.direction.y == 0.0 && ray.direction.z == 0.0)
         throw std::invalid_argument("ray direction must be nonzero");
     if (!std::isfinite(t_min) || !std::isfinite(t_max) || t_min > t_max)
         throw std::invalid_argument("ray interval must be finite and ordered");
@@ -39,33 +82,53 @@ AABB triangle_bounds(const Triangle& tri) {
 }
 
 Vec3 triangle_centroid(const Triangle& tri) {
-    return {(tri.a.x + tri.b.x + tri.c.x) / 3.0,
-            (tri.a.y + tri.b.y + tri.c.y) / 3.0,
-            (tri.a.z + tri.b.z + tri.c.z) / 3.0};
+    return {tri.a.x / 3.0 + tri.b.x / 3.0 + tri.c.x / 3.0,
+            tri.a.y / 3.0 + tri.b.y / 3.0 + tri.c.y / 3.0,
+            tri.a.z / 3.0 + tri.b.z / 3.0 + tri.c.z / 3.0};
 }
 
 std::optional<TriangleHit> intersect_triangle(const Triangle& tri, std::size_t index,
                                                const Ray& ray, double t_min,
                                                double t_max) {
-    const Vec3 edge1 = tri.b - tri.a;
-    const Vec3 edge2 = tri.c - tri.a;
-    const Vec3 p = cross(ray.direction, edge2);
-    const double determinant = dot(edge1, p);
-    const double scale = std::sqrt(squared_length(edge1) * squared_length(edge2) *
-                                   squared_length(ray.direction));
-    const double tolerance = 16.0 * std::numeric_limits<double>::epsilon() * scale;
-    if (std::abs(determinant) <= tolerance) return std::nullopt;
+    const WideVec3 a = to_wide(tri.a);
+    const WideVec3 edge1 = to_wide(tri.b) - a;
+    const WideVec3 edge2 = to_wide(tri.c) - a;
+    const WideVec3 direction = to_wide(ray.direction);
+    const long double edge_scale = std::max(max_abs(edge1), max_abs(edge2));
+    const long double direction_scale = max_abs(direction);
+    if (edge_scale == 0.0L || !std::isfinite(edge_scale) ||
+        direction_scale == 0.0L || !std::isfinite(direction_scale))
+        return std::nullopt;
 
-    const double inverse = 1.0 / determinant;
-    const Vec3 from_a = ray.origin - tri.a;
-    const double u = dot(from_a, p) * inverse;
-    if (u < 0.0 || u > 1.0) return std::nullopt;
-    const Vec3 q = cross(from_a, edge1);
-    const double v = dot(ray.direction, q) * inverse;
-    if (v < 0.0 || u + v > 1.0) return std::nullopt;
-    const double t = dot(edge2, q) * inverse;
-    if (t < t_min || t > t_max) return std::nullopt;
-    return TriangleHit{index, t, u, v, ray.origin + ray.direction * t};
+    const WideVec3 e1 = edge1 / edge_scale;
+    const WideVec3 e2 = edge2 / edge_scale;
+    const WideVec3 d = direction / direction_scale;
+    const WideVec3 p = wide_cross(d, e2);
+    const long double determinant = wide_dot(e1, p);
+    const long double scale = std::hypot(e1.x, e1.y, e1.z) *
+                              std::hypot(e2.x, e2.y, e2.z) *
+                              std::hypot(d.x, d.y, d.z);
+    const long double tolerance = 16.0L * std::numeric_limits<double>::epsilon() * scale;
+    if (!std::isfinite(determinant) || std::abs(determinant) <= tolerance)
+        return std::nullopt;
+
+    const WideVec3 from_a = (to_wide(ray.origin) - a) / edge_scale;
+    const long double u = wide_dot(from_a, p) / determinant;
+    if (!std::isfinite(u) || u < 0.0L || u > 1.0L) return std::nullopt;
+    const WideVec3 q = wide_cross(from_a, e1);
+    const long double v = wide_dot(d, q) / determinant;
+    if (!std::isfinite(v) || v < 0.0L || u + v > 1.0L) return std::nullopt;
+    const long double t = (edge_scale / direction_scale) * wide_dot(e2, q) / determinant;
+    if (!std::isfinite(t) || t < static_cast<long double>(t_min) ||
+        t > static_cast<long double>(t_max))
+        return std::nullopt;
+
+    const long double w = 1.0L - u - v;
+    const WideVec3 position = to_wide(tri.a) * w + to_wide(tri.b) * u + to_wide(tri.c) * v;
+    return TriangleHit{index, static_cast<double>(t), static_cast<double>(u),
+                       static_cast<double>(v),
+                       {static_cast<double>(position.x), static_cast<double>(position.y),
+                        static_cast<double>(position.z)}};
 }
 
 } // namespace
@@ -120,7 +183,7 @@ void AABB::expand(const AABB& box) {
 
 Vec3 AABB::centroid() const {
     if (empty_) throw std::logic_error("empty AABB has no centroid");
-    return {(min_.x + max_.x) * 0.5, (min_.y + max_.y) * 0.5, (min_.z + max_.z) * 0.5};
+    return {midpoint(min_.x, max_.x), midpoint(min_.y, max_.y), midpoint(min_.z, max_.z)};
 }
 
 double AABB::squared_distance(const Vec3& point) const {
@@ -138,22 +201,22 @@ std::optional<std::pair<double, double>> AABB::intersect_ray(
     const Ray& ray, double t_min, double t_max) const {
     require_ray(ray, t_min, t_max);
     if (empty_) return std::nullopt;
-    double near_t = t_min;
-    double far_t = t_max;
+    long double near_t = t_min;
+    long double far_t = t_max;
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const double direction = ray.direction[axis];
         if (direction == 0.0) {
             if (ray.origin[axis] < min_[axis] || ray.origin[axis] > max_[axis]) return std::nullopt;
             continue;
         }
-        double t0 = (min_[axis] - ray.origin[axis]) / direction;
-        double t1 = (max_[axis] - ray.origin[axis]) / direction;
+        long double t0 = (static_cast<long double>(min_[axis]) - ray.origin[axis]) / direction;
+        long double t1 = (static_cast<long double>(max_[axis]) - ray.origin[axis]) / direction;
         if (t0 > t1) std::swap(t0, t1);
         near_t = std::max(near_t, t0);
         far_t = std::min(far_t, t1);
         if (near_t > far_t) return std::nullopt;
     }
-    return std::make_pair(near_t, far_t);
+    return std::make_pair(static_cast<double>(near_t), static_cast<double>(far_t));
 }
 
 Orientation orient3d(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
