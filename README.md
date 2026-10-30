@@ -31,7 +31,7 @@ The dependency-free CTest executable covers vector arithmetic; AABB distance and
 ## Limitations and numerical notes
 
 - `orient3d` is **not formally exact**. Its `long double` fallback may have no extra precision on some platforms and remains subject to floating-point rounding/overflow/underflow. Use an adaptive exact-predicate library if topology decisions must be certified.
-- Inputs to geometry indexes and predicates must be finite. The code rejects non-finite points/rays and invalid query intervals. Very large coordinate magnitudes can still overflow intermediate double arithmetic.
+- Inputs to geometry indexes and predicates must be finite. The code rejects non-finite points/rays and invalid query intervals. Ray/AABB and ray/triangle intersections use widened or scaled intermediates to avoid common overflow/underflow failures, but this is not a general robustness guarantee: `long double` may equal `double` on some platforms, and operations such as KD-tree squared distances can still overflow at extreme magnitudes.
 - The triangle routine uses a scale-relative floating-point parallelism threshold and exact range comparisons for barycentric coordinates. Near-degenerate triangles, nearly parallel rays and boundary cases can be sensitive to roundoff. Degenerate triangles are not treated as meaningful surfaces.
 - Ray parameter `t` is measured in the supplied direction's units; directions are not normalized. Default ray interval is `[0, 1e300]`.
 - The BVH is static after construction, uses median splits, and reports one closest hit; there are no mesh mutation, refit, all-hit, or self-intersection APIs.
